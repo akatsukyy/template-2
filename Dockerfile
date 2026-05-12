@@ -23,4 +23,4 @@ RUN pip install --no-cache-dir ansible-core==2.16.5 jmespath netaddr requests py
 
 ENV PATH="/home/runner/.local/bin:${PATH}"
 
-USER runner
+USER root
