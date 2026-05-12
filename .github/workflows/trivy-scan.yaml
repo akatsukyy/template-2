@@ -25,7 +25,7 @@ permissions:
 jobs:
   trivy-scan:
     name: Trivy scan
-    runs-on: ubuntu-dind
+    runs-on: ubuntu-latest
 
     steps:
       # ── 1. Checkout ────────────────────────────────────────────────────────
