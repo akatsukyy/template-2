@@ -1,10 +1,6 @@
-pyyaml
-jsonpath
-jsonpath-ng
-Jinja2
-prometheus_client
-pydantic
-uvicorn
-starlette
-fastapi
-aiohttp
+django==2.2.0
+flask==0.12.0
+requests==2.6.0
+pyyaml==3.13
+Pillow==8.0.0
+cryptography==2.6.0
