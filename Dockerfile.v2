@@ -1,26 +1,26 @@
-FROM python:latest
-LABEL GIT_COMMIT_UPDATE=6244db9
+# Dockerfile.vulnerable
+# Dùng để test Trivy scan — KHÔNG dùng production
 
-ENV DEBIAN_FRONTEND=noninteractive
-ARG RUNNER_VERSION
+# base image cũ, nhiều CVE
+FROM python:3.6
+
+# chạy với root — misconfig
 USER root
 
-# Install necessary packages
-RUN apt-get -y update \
-  && apt-get --no-install-recommends install -y apt-utils wget python3-pip python3-venv sshpass iputils-ping \
-  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/ \
-  && apt-get autoclean \
-  && apt-get autoremove -y
+# dependency cũ, có CVE đã biết
+RUN pip install \
+    django==2.2.0 \
+    flask==0.12.0 \
+    requests==2.6.0 \
+    pyyaml==3.13
 
-# Create Python virtual environment
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# copy toàn bộ context vào — misconfig (copy cả .env, secret, ...)
+COPY . /app
 
+WORKDIR /app
 
-# Install ansible
-RUN pip install --no-cache-dir ansible-core==2.16.5 jmespath netaddr requests pyvmomi==8.0.2.0 \
-  && pip install --no-cache-dir ansible==7.6.0 --no-deps
+# expose port không cần thiết
+EXPOSE 22
+EXPOSE 8080
 
-ENV PATH="/home/runner/.local/bin:${PATH}"
-
-USER root
+CMD ["python", "app.py"]

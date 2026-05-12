@@ -1,0 +1,10 @@
+pyyaml
+jsonpath
+jsonpath-ng
+Jinja2
+prometheus_client
+pydantic
+uvicorn
+starlette
+fastapi
+aiohttp
