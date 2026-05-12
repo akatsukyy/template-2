@@ -136,8 +136,7 @@ jobs:
               .Target as $t |
               .Misconfigurations[]? |
               select(.Severity == "CRITICAL" or .Severity == "HIGH") |
-              (.ID | ascii_downcase | gsub("-";"")) as $id_clean |
-              "| \(.Severity) | [\(.ID)](https://avd.aquasec.com/misconfig/\($id_clean)) | \(.Title) | \($t) |"
+              "| \(.Severity) | [\(.ID)](\(.PrimaryURL)) | \(.Title) | \($t) |"
             ' "$F" >> "$GITHUB_STEP_SUMMARY" || true
             {
               echo ""
