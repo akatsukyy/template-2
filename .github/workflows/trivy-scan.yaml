@@ -51,8 +51,7 @@ jobs:
       # ── 4. Scan (exit-code 0 — evaluate riêng ở bước 5) ──────────────────
       - name: Trivy fs scan
         run: |
-          trivy fs . \
-            --scanners   \
+          trivy fs . --scanners secret,misconfig,vuln \
             --severity CRITICAL,HIGH \
             --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
             --format json \
