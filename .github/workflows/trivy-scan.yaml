@@ -1,0 +1,250 @@
+# .github/workflows/trivy-scan.yml
+#
+# Chạy khi PR vào main/master.
+# Policy:
+#   - Secret ở HEAD                    → ❌ fail + mail committer & IT team
+#   - CRITICAL/HIGH vuln  (có fix)     → ❌ fail
+#   - CRITICAL/HIGH misconfig (có fix) → ❌ fail
+#   - Unfixed / MEDIUM trở xuống       → ⚠️  log only, không fail
+#
+# Required secrets:
+#   MAIL_USERNAME  – địa chỉ Gmail gửi đi (SMTP user)
+#   MAIL_PASSWORD  – Gmail App Password
+#   IT_TEAM_EMAIL  – email IT team nhận secret alert
+
+name: Trivy Security Scan
+
+on:
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  trivy-scan:
+    name: Trivy scan
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ── 2. Helm dependency update (bỏ qua nếu không có Chart.yaml) ────────
+      - name: Helm dependency update
+        run: |
+          find . -name "Chart.yaml" -not -path "*/.git/*" | while read f; do
+            helm dependency update "$(dirname "$f")" 2>/dev/null || true
+          done
+        continue-on-error: true
+
+      # ── 3. Install Trivy binary ────────────────────────────────────────────
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin
+
+      # ── 4. Scan (exit-code 0 — evaluate riêng ở bước 5) ──────────────────
+      - name: Trivy fs scan
+        run: |
+          trivy fs . --scanners secret,misconfig,vuln \
+            --severity CRITICAL,HIGH \
+            --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
+            --format json \
+            --output trivy-fs.json \
+            --exit-code 0
+        continue-on-error: true
+
+      # ── 5. Đếm findings, lưu vào GITHUB_ENV ───────────────────────────────
+      - name: Parse findings
+        run: |
+          F="trivy-fs.json"
+          SECRET=0; VULN=0; MISCONF=0
+
+          if [ -f "$F" ]; then
+            SECRET=$(jq  '[.Results[]?.Secrets[]?] | length' "$F" 2>/dev/null || echo 0)
+            VULN=$(jq    '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' "$F" 2>/dev/null || echo 0)
+            MISCONF=$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity=="CRITICAL" or .Severity=="HIGH")] | length' "$F" 2>/dev/null || echo 0)
+          fi
+
+          echo "SECRET=$SECRET"   >> "$GITHUB_ENV"
+          echo "VULN=$VULN"       >> "$GITHUB_ENV"
+          echo "MISCONF=$MISCONF" >> "$GITHUB_ENV"
+
+          TOTAL=$((SECRET + VULN + MISCONF))
+          [ "$TOTAL" -gt 0 ] && STATUS="❌ Issues found" || STATUS="✅ Clean"
+          echo "SCAN_STATUS=$STATUS" >> "$GITHUB_ENV"
+
+      # ── 6. Ghi $GITHUB_STEP_SUMMARY ───────────────────────────────────────
+      - name: Write summary
+        if: always()
+        run: |
+          F="trivy-fs.json"
+
+          # Header
+          {
+            echo "# 🔍 Trivy — $SCAN_STATUS"
+            echo ""
+            echo "**PR:** #${{ github.event.pull_request.number }} · **Commit:** \`${{ github.sha }}\` · **Author:** \`${{ github.actor }}\`"
+            echo ""
+            echo "| Category | Count | Status |"
+            echo "|----------|:-----:|:------:|"
+            echo "| 🔑 Secrets | $SECRET | $([ "$SECRET"  = "0" ] && echo "✅" || echo "❌") |"
+            echo "| 🛡️ Vulnerabilities (CRITICAL/HIGH, fixable) | $VULN | $([ "$VULN"    = "0" ] && echo "✅" || echo "❌") |"
+            echo "| ⚙️ Misconfigurations (CRITICAL/HIGH, fixable) | $MISCONF | $([ "$MISCONF" = "0" ] && echo "✅" || echo "❌") |"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Vulnerabilities detail
+          if [ "$VULN" -gt 0 ] && [ -f "$F" ]; then
+            {
+              echo "## 🛡️ Vulnerabilities"
+              echo "<details><summary>🔴 Xem tất cả $VULN finding(s)</summary>"
+              echo ""
+              echo "| Severity | CVE | Package | Installed | Fixed in |"
+              echo "|----------|-----|---------|-----------|----------|"
+            } >> "$GITHUB_STEP_SUMMARY"
+            jq -r '
+              .Results[]?.Vulnerabilities[]? |
+              select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+              "| \(.Severity) | \(.VulnerabilityID) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "-") |"
+            ' "$F" >> "$GITHUB_STEP_SUMMARY" || true
+            {
+              echo ""
+              echo "</details>"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Misconfigurations detail
+          if [ "$MISCONF" -gt 0 ] && [ -f "$F" ]; then
+            {
+              echo "## ⚙️ Misconfigurations"
+              echo "<details><summary>🟠 Xem tất cả $MISCONF finding(s)</summary>"
+              echo ""
+              echo "| Severity | ID | Title | File |"
+              echo "|----------|----|-------|------|"
+            } >> "$GITHUB_STEP_SUMMARY"
+            jq -r '
+              .Results[]? |
+              .Target as $t |
+              .Misconfigurations[]? |
+              select(.Severity == "CRITICAL" or .Severity == "HIGH") |
+              "| \(.Severity) | [\(.ID)](\(.PrimaryURL)) | \(.Title) | \($t) |"
+            ' "$F" >> "$GITHUB_STEP_SUMMARY" || true
+            {
+              echo ""
+              echo "</details>"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Secrets detail (chỉ show rule/file, không expose raw value)
+          if [ "$SECRET" -gt 0 ] && [ -f "$F" ]; then
+            {
+              echo "## 🔑 Secrets"
+              echo "<details><summary>🔑 Xem tất cả $SECRET secret(s)</summary>"
+              echo ""
+              echo "| Rule ID | Severity | Title | File |"
+              echo "|---------|----------|-------|------|"
+            } >> "$GITHUB_STEP_SUMMARY"
+            jq -r '
+              .Results[]? |
+              .Target as $t |
+              .Secrets[]? |
+              "| \(.RuleID) | \(.Severity) | \(.Title) | \($t) |"
+            ' "$F" >> "$GITHUB_STEP_SUMMARY" || true
+            {
+              echo ""
+              echo "</details>"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # ── 7. Mail full report → committer (nếu có finding) ──────────────────
+      - name: Mail report to committer
+        if: |
+          always() &&
+          (env.SECRET != '0' || env.VULN != '0' || env.MISCONF != '0')
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "[Trivy] ${{ env.SCAN_STATUS }} — PR #${{ github.event.pull_request.number }} (${{ github.repository }})"
+          to: ${{ github.event.pull_request.user.login }}@users.noreply.github.com
+          from: Security Bot <${{ secrets.MAIL_USERNAME }}>
+          body: |
+            Trivy Security Scan — ${{ env.SCAN_STATUS }}
+            ===============================================
+            Repository : ${{ github.repository }}
+            PR         : #${{ github.event.pull_request.number }} — ${{ github.event.pull_request.title }}
+            Author     : ${{ github.actor }}
+            Commit     : ${{ github.sha }}
+            Run URL    : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Findings summary
+            ----------------
+            Secrets                          : ${{ env.SECRET }}
+            Vulnerabilities (CRITICAL/HIGH)  : ${{ env.VULN }}
+            Misconfigurations (CRITICAL/HIGH) : ${{ env.MISCONF }}
+
+            Chi tiết xem tại Summary tab của run ở link trên.
+
+      # ── 8. Mail secret alert → IT team (chỉ khi có secret) ────────────────
+      - name: Build secret alert body
+        if: always() && env.SECRET != '0'
+        run: |
+          {
+            echo "=== SECRET ALERT ==="
+            echo "Repository : ${{ github.repository }}"
+            echo "PR         : #${{ github.event.pull_request.number }}"
+            echo "Author     : ${{ github.actor }}"
+            echo "Commit     : ${{ github.sha }}"
+            echo "Run URL    : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo ""
+            echo "--- Secrets found ---"
+            [ -f trivy-fs.json ] && jq -r '
+              .Results[]? | .Target as $t | .Secrets[]? |
+              "File    : \($t)\nRule    : \(.RuleID)\nTitle   : \(.Title)\nSeverity: \(.Severity)\n"
+            ' trivy-fs.json 2>/dev/null || echo "(no data)"
+          } > secret-alert.txt
+
+      - name: Mail secret alert to IT team
+        if: always() && env.SECRET != '0'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "[SECRET ALERT] ${{ github.repository }} PR #${{ github.event.pull_request.number }} — ${{ env.SECRET }} secret(s)"
+          to: ${{ secrets.IT_TEAM_EMAIL }}
+          from: Security Bot <${{ secrets.MAIL_USERNAME }}>
+          body: file://secret-alert.txt
+
+      # ── 9. Upload artifact (30 ngày) ──────────────────────────────────────
+      - name: Upload scan artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report-${{ github.sha }}
+          path: trivy-fs.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # ── 10. Fail pipeline (sau khi summary + mail đã xong) ────────────────
+      - name: Evaluate result
+        if: always()
+        run: |
+          FAIL=0
+          [ "$SECRET"  -gt 0 ] && echo "❌ $SECRET secret(s) in HEAD"        && FAIL=1
+          [ "$VULN"    -gt 0 ] && echo "❌ $VULN fixable vuln(s)"             && FAIL=1
+          [ "$MISCONF" -gt 0 ] && echo "❌ $MISCONF fixable misconfiguration(s)" && FAIL=1
+          [ "$FAIL" -eq 0 ]   && echo "✅ No blocking findings. OK to merge."
+          exit "$FAIL"

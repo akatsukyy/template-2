@@ -1,0 +1,13 @@
+FROM debian:bullseye-slim
+
+# Giữ nguyên các package mặc định của bullseye-slim
+# libdb5.3 được cài sẵn trong base image này → CVE-2019-8457 sẽ xuất hiện
+
+# Cài thêm sqlite3 version cũ để trigger thêm CVE
+RUN apt-get update && apt-get install -y \
+    sqlite3 \
+    libsqlite3-0 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+CMD ["bash"]
