@@ -1,27 +1,49 @@
-PR opened → target: main / master
-   ↓
-Checkout (fetch-depth: 1)        ← không cần full history nữa
-   ↓
-Helm dependency update (nếu có Chart.yaml)
-   ↓
-Install Trivy
-   ↓
-── HEAD SCAN ──────────────────────────────────────────────
-   ↓
-trivy fs . --scanners secret,misconfig,vuln
-           --ignore-unfixed
-           --severity CRITICAL,HIGH
-           --file-patterns "dockerfile:.*[Dd]ockerfile.*"
-   ↓
-── EVALUATE ───────────────────────────────────────────────
-   ↓
-   ├── Secret?              → ❌ Fail + mail committer & IT team
-   ├── CRITICAL/HIGH vuln (có fix)?   → ❌ Fail
-   ├── CRITICAL/HIGH misconfig (có fix)? → ❌ Fail
-   └── Không có gì / chỉ unfixed   → ✅ Pass
-   ↓
-── OUTPUT (luôn chạy) ─────────────────────────────────────
-   ↓
-   ├── $GITHUB_STEP_SUMMARY  → full report, từng phần
-   ├── Mail committer        → khi có bất kỳ finding nào
-   └── Mail IT team          → chỉ khi có secret, không log summary
+# Trivy Security Scan — PR Flow
+
+## Trigger
+- PR opened → target: `main` / `master`
+
+---
+
+## Steps
+
+### 1. Checkout
+- `fetch-depth: 1` — full history no longer needed
+
+### 2. Helm Dependency Update
+- Runs only if `Chart.yaml` exists in the repository
+
+### 3. Install Trivy
+
+---
+
+## Head Scan
+
+```bash
+trivy fs . \
+  --scanners secret,misconfig,vuln \
+  --ignore-unfixed \
+  --severity CRITICAL,HIGH \
+  --file-patterns "dockerfile:.*[Dd]ockerfile.*"
+```
+
+---
+
+## Evaluate
+
+| Finding | Result |
+|---|---|
+| Secret found | ❌ Fail + mail committer & IT team |
+| CRITICAL/HIGH vuln (fixable) | ❌ Fail |
+| CRITICAL/HIGH misconfig (fixable) | ❌ Fail |
+| Nothing found / unfixed only | ✅ Pass |
+
+---
+
+## Output *(always runs)*
+
+| Destination | Condition | Content |
+|---|---|---|
+| `$GITHUB_STEP_SUMMARY` | Always | Full report, per section |
+| Mail committer | Any finding exists | Findings summary |
+| Mail IT team | Secret found only | No summary logged |

@@ -52,8 +52,7 @@ jobs:
       - name: Trivy fs scan
         run: |
           trivy fs . \
-            --scanners secret,misconfig,vuln \
-            --ignore-unfixed \
+            --scanners   \
             --severity CRITICAL,HIGH \
             --file-patterns "dockerfile:.*[Dd]ockerfile.*" \
             --format json \
