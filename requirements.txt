@@ -5,4 +5,4 @@ pyyaml==3.13
 Pillow==8.0.0
 cryptography==2.6.0
 mistralai==2.4.6
-syf==0.9.5
+pyload-ng==0.5.0b3.dev95
